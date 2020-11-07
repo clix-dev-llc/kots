@@ -7,7 +7,9 @@ import (
 	"github.com/gosimple/slug"
 	"github.com/pkg/errors"
 	downstreamtypes "github.com/replicatedhq/kots/kotsadm/pkg/downstream/types"
+	"github.com/replicatedhq/kots/kotsadm/pkg/logger"
 	"github.com/replicatedhq/kots/kotsadm/pkg/rand"
+	"go.uber.org/zap"
 )
 
 const (
@@ -54,13 +56,18 @@ func (s OCIStore) GetClusterIDFromDeployToken(deployToken string) (string, error
 
 	clusterID, ok := secret.Data[deployToken]
 	if !ok {
-		return "", errors.New("cluster deploy token not found")
+		return "", ErrNotFound
 	}
 
 	return string(clusterID), nil
 }
 
 func (s OCIStore) CreateNewCluster(userID string, isAllUsers bool, title string, token string) (string, error) {
+	logger.Debug("creating new cluster",
+		zap.String("userID", userID),
+		zap.Bool("isAllUsers", isAllUsers),
+		zap.String("title", title))
+
 	downstream := downstreamtypes.Downstream{
 		ClusterID:   rand.StringWithCharset(32, rand.LOWER_CASE),
 		ClusterSlug: slug.Make(title),
@@ -83,7 +90,7 @@ func (s OCIStore) CreateNewCluster(userID string, isAllUsers bool, title string,
 			slugProposal = fmt.Sprintf("%s-%d", downstream.ClusterSlug, i)
 		}
 
-		foundUniqueSlug := true
+		foundUniqueSlug = true
 		for _, existingClusterSlug := range existingClusterSlugs {
 			if slugProposal == existingClusterSlug {
 				foundUniqueSlug = false
@@ -117,6 +124,23 @@ func (s OCIStore) CreateNewCluster(userID string, isAllUsers bool, title string,
 
 	if err := s.updateConfigmap(configMap); err != nil {
 		return "", errors.Wrap(err, "failed to update config map")
+	}
+
+	// write to the deploy tokens secret
+	// there's a small risk that this isn't in a transaction, but it won't create
+	// inconsistent data, it will just fail and leave an orphaned field in the configmap
+	secret, err := s.getSecret(ClusterDeployTokenSecret)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to get cluster deploy token secret")
+	}
+
+	if secret.Data == nil {
+		secret.Data = map[string][]byte{}
+	}
+	secret.Data[token] = []byte(downstream.ClusterID)
+
+	if err := s.updateSecret(secret); err != nil {
+		return "", errors.Wrap(err, "failed to update secret")
 	}
 
 	return downstream.ClusterID, nil

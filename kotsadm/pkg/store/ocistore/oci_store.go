@@ -107,6 +107,20 @@ func (s OCIStore) getSecret(name string) (*corev1.Secret, error) {
 	return existingSecret, nil
 }
 
+func (s OCIStore) updateSecret(secret *corev1.Secret) error {
+	clientset, err := s.GetClientset()
+	if err != nil {
+		return errors.Wrap(err, "failed to get clientset")
+	}
+
+	_, err = clientset.CoreV1().Secrets(os.Getenv("POD_NAMESPACE")).Update(context.Background(), secret, metav1.UpdateOptions{})
+	if err != nil {
+		return errors.Wrap(err, "failed to update config map")
+	}
+
+	return nil
+}
+
 func (s OCIStore) getConfigmap(name string) (*corev1.ConfigMap, error) {
 	clientset, err := s.GetClientset()
 	if err != nil {
